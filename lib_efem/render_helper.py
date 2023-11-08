@@ -291,7 +291,7 @@ def _create_node_from_mesh(
 
     # Create vertex colors if needed
     if color is not None:
-        color = np.asanyarray(color, dtype=np.float)
+        color = np.asanyarray(color, dtype=float)
         if color.ndim == 1 or len(color) != len(mesh.vertices):
             color = np.repeat(color[np.newaxis, :], len(mesh.vertices), axis=0)
         mesh.visual.vertex_colors = color

@@ -28,7 +28,7 @@ from pytorch3d.ops.knn import knn_points
 import shutil
 import logging
 from matplotlib import cm
-from torch_scatter import scatter_mean
+# from torch_scatter import scatter_mean
 from pytorch3d.transforms.rotation_conversions import euler_angles_to_matrix
 
 

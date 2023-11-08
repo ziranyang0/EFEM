@@ -1,17 +1,20 @@
-conda remove -n efem --all -y
-conda create -n efem python=3.8 -y
-source activate efem
+# conda remove -n Efem --all -y
+# conda create -n Efem python=3.10 -y
+# source activate Efem
+conda activate Efem
 
 # install pytorch
 echo ====INSTALLING PyTorch======
 which python
 which pip
-conda install pytorch=1.10.0 torchvision torchaudio cudatoolkit=11.3 -c pytorch -y
+# conda install pytorch=1.10.0 torchvision torchaudio cudatoolkit=11.3 -c pytorch -y
+conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 pytorch-cuda=11.7 -c pytorch -c nvidia -y
 
 # # install pytorch3d
 echo ====INSTALLING=PYTORCH3D======
 conda install -c fvcore -c iopath -c conda-forge fvcore iopath -y
 conda install -c bottler nvidiacub -y
+# conda install pytorch3d -c pytorch3d -y
 conda install pytorch3d=0.6.1 -c pytorch3d -y
 
 # # Install Pytorch Geometry

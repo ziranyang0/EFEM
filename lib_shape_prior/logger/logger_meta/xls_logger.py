@@ -72,7 +72,7 @@ class XLSLogger(BaseLogger):
             self.pd_container[k].to_excel(
                 os.path.join(
                     self.log_path,
-                    k + "_" + str(self.current_epoch) + "_" + self.current_phase + ".xls",
+                    k + "_" + str(self.current_epoch) + "_" + self.current_phase + ".xlsx",
                 )
             )
             self.pd_container[k] = pd.DataFrame()

@@ -41,7 +41,7 @@ class PerModelConfig:
         self.num_init_proposal_list = []
         num_init_proposal_list = self.with_default(c, c_d, ["num_init_proposal_list"])
         for n_init in num_init_proposal_list:
-            n = (init_ratio * n_init).astype(np.int)
+            n = (init_ratio * n_init).astype(np.int_)
             self.num_init_proposal_list.append(n.tolist())
 
         self.init_crop_mode = self.with_default(c, c_d, ["crop_mode"])

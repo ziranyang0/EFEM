@@ -329,7 +329,7 @@ class Dataset(Dataset):
                 if self.field_mode == "sdf":
                     ret["points.uni.value"] = sdf_data[:, 3]
                 else:
-                    ret["points.uni.value"] = (sdf_data[:, 3] <= 0).astype(np.float)
+                    ret["points.uni.value"] = (sdf_data[:, 3] <= 0).astype(float)
             if self.n_query_nss > 0:
                 choice = np.random.choice(len(nss_query), self.n_query_nss)
                 sdf_data = nss_query[choice]
@@ -337,12 +337,12 @@ class Dataset(Dataset):
                 if self.field_mode == "sdf":
                     ret["points.nss.value"] = sdf_data[:, 3]
                 else:
-                    ret["points.nss.value"] = (sdf_data[:, 3] <= 0).astype(np.float)
+                    ret["points.nss.value"] = (sdf_data[:, 3] <= 0).astype(float)
 
             # load evaluation if necessary
             if self.mode != "train":
                 ret["eval.points"] = uni_query[: self.n_query_eval, :3]
-                ret["eval.points.occ"] = (uni_query[: self.n_query_eval, 3] <= 0).astype(np.float)
+                ret["eval.points.occ"] = (uni_query[: self.n_query_eval, 3] <= 0).astype(float)
                 ret["eval.points.value"] = uni_query[: self.n_query_eval, 3]
                 ret["eval.pointcloud"] = pointcloud[: self.n_query_eval]
         elif self.dataset_mode == "occ":  # can only have occ mode, no sdf mode
@@ -353,10 +353,10 @@ class Dataset(Dataset):
             if self.n_query_uni > 0:
                 choice = np.random.choice(len(query), self.n_query_uni)
                 ret["points.uni"] = query[choice]
-                ret["points.uni.value"] = occ[choice].astype(np.float)
+                ret["points.uni.value"] = occ[choice].astype(float)
             if self.mode != "train":
                 ret["eval.points"] = query[: self.n_query_eval, :3]
-                ret["eval.points.occ"] = occ[: self.n_query_eval].astype(np.float)
+                ret["eval.points.occ"] = occ[: self.n_query_eval].astype(float)
                 ret["eval.pointcloud"] = pointcloud[: self.n_query_eval]
         else:
             raise NotImplementedError()
@@ -531,7 +531,7 @@ class Dataset(Dataset):
         random_dir = random_dir / (np.linalg.norm(random_dir, axis=1, keepdims=True) + 1e-8)
         d = pcl[None, ...] - anchor[:, None, :]
         inner = (d * random_dir[:, None, :]).sum(-1)  # K,N
-        reduce_mask = (inner < 0).astype(np.float)
+        reduce_mask = (inner < 0).astype(float)
         random_reduce = np.random.uniform(
             low=self.s1_halfspace_difference_range[0],
             high=self.s1_halfspace_difference_range[1],

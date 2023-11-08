@@ -20,8 +20,8 @@ setuptools
 # sklearn
 scikit-learn
 opencv-python
-jupyter
-jupyterlab
+# jupyter
+# jupyterlab # no
 objgraph
 pyquaternion
 seaborn
@@ -30,7 +30,7 @@ rtree
 tqdm
 black
 openpyxl
-scikit-image==0.14.2
+# scikit-image==0.14.2
 tensorboard-plugin-profile
 imageio
 easydict==1.9
