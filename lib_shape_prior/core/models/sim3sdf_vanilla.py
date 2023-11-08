@@ -118,7 +118,7 @@ class Model(ModelBase):
             df_hat = abs(batch["df_hat"]).detach().cpu().numpy()
             df_error = abs(df_gt - df_hat)
             df_correct = df_error < self.df_acc_th
-            nss_mask = (df_gt < self.nss_th).astype(np.float)
+            nss_mask = (df_gt < self.nss_th).astype(float)
             far_mask = 1.0 - nss_mask
             df_acc = df_correct.sum(-1) / df_correct.shape[1]
             df_acc_nss = (df_correct * nss_mask).sum(-1) / (nss_mask.sum(-1) + 1e-6)
@@ -289,10 +289,10 @@ class SIM3Recon(torch.nn.Module):
         error_center_i = centroid.norm(dim=-1)
 
         embedding = {
-            "z_so3": pred_so3_feat,
-            "z_inv": pred_inv_feat,
-            "s": pred_scale,
-            "t": centroid.unsqueeze(1),
+            "z_so3": pred_so3_feat, # [B, 256, 3]
+            "z_inv": pred_inv_feat, # [B, 256]
+            "s": pred_scale, # [B]
+            "t": centroid.unsqueeze(1), # [B, 1, 3]
         }
 
         if phase.startswith("test") or viz_flag:
@@ -401,7 +401,7 @@ class SIM3Recon(torch.nn.Module):
             inv_query = torch.cat([inv_query, pe_query.transpose(2, 1)], 2)
 
         if self.decoder_type == "inner":
-            input = torch.cat([inv_query, z_inv[:, None, :].expand(-1, M, -1)], -1)
+            input = torch.cat([inv_query, z_inv[:, None, :].expand(-1, M, -1)], -1) # input: [B, N, 513]
             sdf = self.network_dict["decoder"](input)
         else:
             sdf = self.network_dict["decoder"](inv_query, None, z_inv)

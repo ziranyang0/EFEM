@@ -140,3 +140,8 @@ log/
 python
 .vscode
 .DS_Store
+
+
+
+##############################
+lib_shape_prior/dev_ckpt/

@@ -176,7 +176,7 @@ class VecDGCNN_att(nn.Module):
 
     def forward(self, x):
 
-        B, _, N = x.shape
+        B, _, N = x.shape # torch.Size([B, 3, N])
 
         feat_list = []
 
@@ -191,17 +191,27 @@ class VecDGCNN_att(nn.Module):
                 )
             else:
                 dst_xyz, dst_f = src_xyz, src_f
-
+            
+            # self.feat_dim: 1 -> [32, 32, 64, 64, 128, 256, 512]
+            # self.down_sample_factor: [2, 4, 4]
+            # self.down_sample_layers: [2, 4, 5]
+            # 一共7层, 0-6
+            # C: [1,   32,  32,  64,  64,  128, 256, 512]
+            # N: [512, 512, 512, 256, 256, 256, 64,  16 ]
+            # det_f: [B, C, 3, N] 
+            # dst_xyz: [B, 1, 3, N]
+            # downsampling: N decreases
+            
             # * First get KNN feat
             num_knn = self.k if i > self.k_early_layers else self.k_early
-            src_nn_f = self.get_graph_feature(
+            src_nn_f = self.get_graph_feature( # torch.Size([B, C, 3, N, num_knn]) num_knn = 16
                 src_f=src_f, dst_f=dst_f, k=num_knn, src_xyz=src_xyz, dst_xyz=dst_xyz, cross=i == 0
             )  # only has N_dst of K nn
 
             # * Apply MSG Passing
             if i < self.atten_start_layer:
                 # message passing is through pooling
-                dst_f = self.pool(self.V_list[i](src_nn_f))
+                dst_f = self.pool(self.V_list[i](src_nn_f)) # torch.Size([B, C', 3, N, num_knn]) -> torch.Size([B, C', 3, N]) C' denotes the channel transformation which implemented in VNLA
             else:  # message passing is through QKV
                 k = self.K_list[i](src_nn_f)  # B,C,3,N,K
                 q = self.Q_list[i](dst_f)
@@ -228,10 +238,10 @@ class VecDGCNN_att(nn.Module):
 
             src_xyz, src_f = dst_xyz, dst_f
 
-        x = self.conv_c(dst_f)
-        x = x.mean(dim=-1, keepdim=False)
+        x = self.conv_c(dst_f) # dst_f: [B, C, 3, N] [32, 512, 3, 16] -> [32, 256, 3, 16]
+        x = x.mean(dim=-1, keepdim=False) # [32, 256, 3]
 
-        z_so3 = channel_equi_vec_normalize(x)  # without scale
+        z_so3 = channel_equi_vec_normalize(x)  # without scale # [32, 256, 3]
         scale = x.norm(dim=-1).mean(1) * self.scale_factor
         z_inv_dual = self.fc_inv(x[..., None]).squeeze(-1)
         v_inv = (channel_equi_vec_normalize(z_inv_dual) * z_so3).sum(-1)
