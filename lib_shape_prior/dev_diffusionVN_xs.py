@@ -203,7 +203,7 @@ class origin_LatentDiffusionModel(nn.Module):
         
         self.layers = nn.ModuleList()
         leak_neg_slope=0.2
-        act_func = nn.LeakyReLU(negative_slope=leak_neg_slope, inplace=False)
+        self.act_func = nn.LeakyReLU(negative_slope=leak_neg_slope, inplace=False)
         for i, hidden_dim in enumerate(hidden_dims):
             if i == 0:
                 self.layers.append(nn.Linear(in_features=self.latent_dim+self.t_emb_dim, 
@@ -228,7 +228,7 @@ class origin_LatentDiffusionModel(nn.Module):
             if i == len(self.layers)-1:
                 feat = layer(feat)
             else:
-                feat = F.relu(layer(feat))
+                feat = self.act_func(layer(feat))
         pred_z_so3 = feat[:, :3*256].reshape(batch_size, -1, 3)
         pred_z_inv = feat[:, 3*256:]
         # assert pred_z_so3.shape[1:] == (256, 3), pred_z_so3.shape
@@ -394,7 +394,7 @@ def main():
 
     seed = 0
 
-    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
     torch.manual_seed(0)
 
@@ -410,13 +410,14 @@ def main():
     num_bands = 4  # Number of frequency bands
 
     # 初始化模型
-    # model = origin_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
-    # wandb.init(project="vnDiffusion", entity="_zrrr", name="origin_x10_4096_8192_8192_4096_weighted1/4_lrup")
-
-    model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
+    model = origin_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
     if not args.debug:
-        wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_x10/4_2048_4096_weighted1/4_lr3e-4_decay0.9")
-    # wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_x10_4096_8192_weighted1/4_bs75")
+        wandb.init(project="vnDiffusion", entity="_zrrr", name="origin_x10_2048_4096_weighted1/4_lrup_leakyrelu")
+
+    # model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
+    # if not args.debug:
+    #     wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_x10/4_2048_4096_weighted1/4_lr3e-4_decay0.9")
+        # wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_x10_4096_8192_weighted1/4_bs75")
     
     print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
     if not args.debug:
@@ -429,7 +430,7 @@ def main():
     autoencoder = None
     
 
-    opt = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)
+    opt = optim.AdamW(model.parameters(), lr=2e-5, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.9)
     scaler = torch.cuda.amp.GradScaler()
     epoch = 0
@@ -464,7 +465,7 @@ def main():
         #     val(model_ema, autoencoder, val_dl, device, seed, epoch)
         #     demo(model_ema, autoencoder, val_dl, device, seed, epoch, steps, eta)
         #     save(model, model_ema, opt, scaler, epoch)
-        if epoch >= 60000:
+        if epoch >= 20000:
             break
     save(model, model_ema, opt, scaler, epoch)
     

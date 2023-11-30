@@ -294,11 +294,13 @@ class CustomDataset(Dataset):
 # N[]
 def main():
     # Prepare the dataset
-    codebook_path = "/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/codebook.npz"
+    # codebook_path = "/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/codebook.npz"
+    codebook_path = "/home/ziran/se3/EFEM/cache/mugs.npz"
     with np.load(codebook_path) as data:
         # 将 npz 文件内容转换为字典
         codebook = {key: data[key] for key in data}
 
+    del codebook['id']
     for k, v in codebook.items():
         if isinstance(v, np.ndarray):
             newv = torch.from_numpy(v)
@@ -314,7 +316,7 @@ def main():
 
     seed = 0
 
-    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
     torch.manual_seed(0)
 
@@ -333,7 +335,7 @@ def main():
     model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
     model_ema = deepcopy(model)
     # wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_1024_2048_2048_1024")
-    wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_4096_8192_lr3e-4_decay0.9_VecLinear")
+    wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_4096_8192_lr3e-4_decay0.9_VecLinear_repocodebook")
 
     print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
     wandb.log({"max_freq": max_freq, "num_bands": num_bands,
