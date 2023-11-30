@@ -1,25 +1,13 @@
-# Numpy
 import numpy as np
-
-# Torch
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.autograd import Variable
-
-# Torchvision
-import torchvision
-import torchvision.transforms as transforms
-
-# Matplotlib
-# %matplotlib inline
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-
-# OS
-import os
-import argparse
+from tqdm.notebook import tqdm, trange
+from copy import deepcopy
+import wandb
 
 
 def imshow(img, file_name=None):
@@ -29,21 +17,6 @@ def imshow(img, file_name=None):
     if file_name is not None:
         plt.savefig(file_name, bbox_inches='tight', pad_inches=0)  # Save the image as a file
     plt.show()  # Display the image
-
-from contextlib import contextmanager
-from copy import deepcopy
-import math
-
-from IPython import display
-from matplotlib import pyplot as plt
-import torch
-from torch import optim, nn
-from torch.nn import functional as F
-from torch.utils import data
-from torchvision import datasets, transforms, utils
-from torchvision.transforms import functional as TF
-from tqdm.notebook import tqdm, trange
-
 
 @torch.no_grad()
 def ema_update(model, averaged_model, decay):
@@ -63,7 +36,6 @@ def ema_update(model, averaged_model, decay):
     for name, buf in model_buffers.items():
         averaged_buffers[name].copy_(buf)
 
-
 # Define the noise schedule and sampling loop
 
 def get_alphas_sigmas(log_snrs):
@@ -75,7 +47,6 @@ def get_alphas_sigmas(log_snrs):
 def get_ddpm_schedule(t):
     """Returns log SNRs for the noise schedule from the DDPM paper."""
     return -torch.special.expm1(1e-4 + 10 * t**2).log()
-
 
 @torch.no_grad()
 def sample_latent(model, autoencoder, x, steps, eta, classes):
@@ -164,12 +135,9 @@ class FourierFeatures(nn.Module):
         embedding = torch.cat((steps.sin(), steps.cos()), dim=-1) * self.std
         return embedding
 
-        
-        
-        
-        
 
 from vec_layers_out import VecLinearNormalizeActivate as VecLNA
+from vec_layers_out import VecLinear
 class LatentDiffusionModel(nn.Module):
     def __init__(self, latent_dim: int, hidden_dims, max_freq, num_bands, std=0.2):
         super(LatentDiffusionModel, self).__init__()
@@ -177,12 +145,10 @@ class LatentDiffusionModel(nn.Module):
         self.timestep_embed = FourierFeatures(max_freq, num_bands, std=std)
         self.t_emb_dim = 2*num_bands
         
-        # 初始化模型层
-        self.layers = nn.ModuleList()
         # input_dim = latent_dim[0] * latent_dim[1] + self.timestep_embed.num_bands * 2  # Additional dims for time embedding
         leak_neg_slope=0.2
         act_func = nn.LeakyReLU(negative_slope=leak_neg_slope, inplace=False)
-        # 构建网络层
+        self.layers = nn.ModuleList()
         for i, hidden_dim in enumerate(hidden_dims):
             if i == 0:
                 self.layers.append(VecLNA(self.latent_dim+self.t_emb_dim, hidden_dims[0], mode="so3", act_func=act_func))
@@ -190,7 +156,8 @@ class LatentDiffusionModel(nn.Module):
                 self.layers.append(VecLNA(hidden_dims[i-1], hidden_dims[i], mode="so3", act_func=act_func))
 
         # 最后一层输出与原始潜在维度相同
-        self.layers.append(VecLNA(hidden_dims[-1], self.latent_dim, mode="so3", act_func=act_func))
+        # self.layers.append(VecLNA(hidden_dims[-1], self.latent_dim, mode="so3", act_func=act_func))
+        self.layers.append(VecLinear(v_in=hidden_dims[-1], v_out=self.latent_dim, mode="so3"))
 
     def forward(self, x, t):
         batch_size = x.size(0)
@@ -255,6 +222,9 @@ def train(model, model_ema, autoencoder, opt, scheduler, rng, train_dl,scaler, e
 
         if i % 50 == 0:
             tqdm.write(f'Epoch: {epoch}, iteration: {i}, loss: {loss.item():g}')
+            wandb.log({"epoch": epoch, "iteration": i,
+                       "loss": loss.item(),
+                       "lr": scheduler.get_last_lr()[0],})
     scheduler.step()
 
 # @eval_mode(model_ema)
@@ -278,28 +248,6 @@ def val(model_ema, autoencoder, val_dl, device, seed, epoch):
         count += len(reals)
     loss = total_loss / count
     tqdm.write(f'Validation: Epoch: {epoch}, loss: {loss:g}')
-
-
-# @eval_mode(model_ema)
-@torch.no_grad()
-@torch.random.fork_rng()
-def demo(model_ema, autoencoder, val_dl, device, seed, epoch, steps, eta):
-    tqdm.write('\nSampling...')
-    torch.manual_seed(seed)
-
-    # noise = torch.randn([100, 3, 32, 32], device=device)
-    noise = torch.rand([100, 3, 32, 32], device=device)
-    fakes_classes = torch.arange(10, device=device).repeat_interleave(10, 0)
-    fakes = sample_latent(model_ema, autoencoder, noise, steps, eta, fakes_classes)
-    
-    # fakes = autoencoder.decode(fakes)
-    
-    grid = utils.make_grid(fakes, 10).cpu()
-    filename = f'demo_{epoch:05}.png'
-    TF.to_pil_image(grid.add(1).div(2).clamp(0, 1)).save(filename)
-    display.display(display.Image(filename))
-    tqdm.write('')
-
 
 def save(model, model_ema, opt, scaler, epoch):
     # if not os.path.exists('./ckpts'):
@@ -366,7 +314,7 @@ def main():
 
     seed = 0
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
     torch.manual_seed(0)
 
@@ -382,16 +330,20 @@ def main():
     num_bands = 4  # Number of frequency bands
 
     # 初始化模型
-    # model = Diffusion().to(device)
     model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
     model_ema = deepcopy(model)
-    print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
+    # wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_1024_2048_2048_1024")
+    wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_4096_8192_lr3e-4_decay0.9_VecLinear")
 
+    print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
+    wandb.log({"max_freq": max_freq, "num_bands": num_bands,
+            #    "device": device,
+               "model_params": sum(p.numel() for p in model.parameters())})
     autoencoder = None
     
 
     opt = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.95)
+    scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.8)
     scaler = torch.cuda.amp.GradScaler()
     epoch = 0
 
@@ -411,9 +363,6 @@ def main():
     # 1 = full noise (DDPM)
     eta = 1.
     
-    
-
-    
     ########### Main Loop ###########
     # val(model_ema, autoencoder, val_dl, device, seed, epoch)
     # demo(model_ema, autoencoder, val_dl, device, seed, epoch, steps, eta)
@@ -425,7 +374,7 @@ def main():
         #     val(model_ema, autoencoder, val_dl, device, seed, epoch)
         #     demo(model_ema, autoencoder, val_dl, device, seed, epoch, steps, eta)
         #     save(model, model_ema, opt, scaler, epoch)
-        if epoch >= 30000:
+        if epoch >= 60000:
             break
     save(model, model_ema, opt, scaler, epoch)
     

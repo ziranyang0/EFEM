@@ -145,3 +145,4 @@ python
 
 ##############################
 lib_shape_prior/dev_ckpt/
+lib_shape_prior/wandb/
