@@ -139,9 +139,10 @@ class FourierFeatures(nn.Module):
 from vec_layers_out import VecLinearNormalizeActivate as VecLNA
 from vec_layers_out import VecLinear
 class LatentDiffusionModel(nn.Module):
-    def __init__(self, latent_dim: int, hidden_dims, max_freq, num_bands, std=0.2):
+    def __init__(self, latent_dim: int, hidden_dims, scalar_hidden_dims, max_freq, num_bands, std=0.2):
         super(LatentDiffusionModel, self).__init__()
         self.latent_dim = latent_dim
+        self.scalar_hidden_dims = scalar_hidden_dims
         self.timestep_embed = FourierFeatures(max_freq, num_bands, std=std)
         self.t_emb_dim = 2*num_bands
         
@@ -153,13 +154,13 @@ class LatentDiffusionModel(nn.Module):
                 self.layers.append(VecLNA(in_features=self.latent_dim,
                                           out_features=hidden_dims[0],
                                           s_in_features=self.latent_dim+self.t_emb_dim,
-                                          s_out_features=hidden_dims[0],
+                                          s_out_features=scalar_hidden_dims[0],
                                           mode="so3", act_func=act_func))
             else:
                 self.layers.append(VecLNA(in_features=hidden_dims[i-1],
                                           out_features=hidden_dims[i],
-                                          s_in_features=hidden_dims[i-1],
-                                          s_out_features=hidden_dims[i],
+                                          s_in_features=scalar_hidden_dims[i-1],
+                                          s_out_features=scalar_hidden_dims[i],
                                           mode="so3", act_func=act_func))
 
         # 最后一层输出与原始维度相同
@@ -172,7 +173,7 @@ class LatentDiffusionModel(nn.Module):
         self.vn_head = VecLinear(v_in=hidden_dims[-1],
                                  v_out=self.latent_dim,
                                  mode="so3",)
-        self.scalar_head = nn.Linear(hidden_dims[-1], self.latent_dim)
+        self.scalar_head = nn.Linear(scalar_hidden_dims[-1], self.latent_dim)
 
         # VecLinear()
         # nn.Linear()
@@ -321,7 +322,7 @@ def val(model_ema, autoencoder, val_dl, device, seed, epoch):
 def save(model, model_ema, opt, scaler, epoch):
     # if not os.path.exists('./ckpts'):
     #     os.mkdir('./ckpts')
-    filename = '/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/latent_diffusionVN_xs.pth'
+    filename = '/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/latent_diffusionVN_xs_vnhead_200k.pth'
     obj = {
         'model': model.state_dict(),
         'model_ema': model_ema.state_dict(),
@@ -349,8 +350,8 @@ class CustomDataset(Dataset):
         # feat = (codebook['z_so3'],codebook['z_inv']) #[B, 256, 3], [B, 256]
                 # fixed center and scale
         # assert feat.shape[1:] == (516,3)
-        self.x = [codebook['z_so3'][i]*10 for i in range(codebook['z_so3'].shape[0])]
-        self.s = [codebook['z_inv'][i]*10 for i in range(codebook['z_inv'].shape[0])]
+        self.x = [codebook['z_so3'][i] for i in range(codebook['z_so3'].shape[0])]
+        self.s = [codebook['z_inv'][i] for i in range(codebook['z_inv'].shape[0])]
         self.pcl = [codebook['pcl'][i] for i in range(codebook['pcl'].shape[0])]
 
     def __len__(self):
@@ -368,17 +369,20 @@ import argparse
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--save_interval", default=10000, type=int)
     args = parser.parse_args()
 
     if args.debug:
         print("Debug mode is enabled")
 
     # Prepare the dataset
-    codebook_path = "/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/codebook.npz"
+    # codebook_path = "/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/codebook.npz"
+    codebook_path = "/home/ziran/se3/EFEM/cache/mugs.npz"
     with np.load(codebook_path) as data:
         # 将 npz 文件内容转换为字典
         codebook = {key: data[key] for key in data}
 
+    del codebook['id']
     for k, v in codebook.items():
         if isinstance(v, np.ndarray):
             newv = torch.from_numpy(v)
@@ -394,7 +398,7 @@ def main():
 
     seed = 0
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:4' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
     torch.manual_seed(0)
 
@@ -410,14 +414,14 @@ def main():
     num_bands = 4  # Number of frequency bands
 
     # 初始化模型
-    model = origin_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
-    if not args.debug:
-        wandb.init(project="vnDiffusion", entity="_zrrr", name="origin_x10_2048_4096_weighted1/4_lrup_leakyrelu")
-
-    # model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
+    # model = origin_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
     # if not args.debug:
-    #     wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_x10/4_2048_4096_weighted1/4_lr3e-4_decay0.9")
-        # wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_x10_4096_8192_weighted1/4_bs75")
+    #     wandb.init(project="vnDiffusion", entity="_zrrr", name="origin_2048_4096_weighted1/4_lrup_leakyrelu_cos_200k")
+
+    scalar_hidden_dims = [256,256,256,256]
+    model = LatentDiffusionModel(latent_dim, hidden_dims, scalar_hidden_dims, max_freq, num_bands).to(device)
+    if not args.debug:
+        wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_2048_4096_weighted1/4_lr5e-4_cos_200k_scalarhiddendims")
     
     print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
     if not args.debug:
@@ -429,9 +433,11 @@ def main():
     model_ema = deepcopy(model)
     autoencoder = None
     
+    num_epochs = 200000
 
-    opt = optim.AdamW(model.parameters(), lr=2e-5, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.9)
+    opt = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-5)
+    # scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.9)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=len(train_dl)*num_epochs, eta_min=1e-7)
     scaler = torch.cuda.amp.GradScaler()
     epoch = 0
 
@@ -465,9 +471,10 @@ def main():
         #     val(model_ema, autoencoder, val_dl, device, seed, epoch)
         #     demo(model_ema, autoencoder, val_dl, device, seed, epoch, steps, eta)
         #     save(model, model_ema, opt, scaler, epoch)
-        if epoch >= 20000:
+        if (epoch + 1) % args.save_interval == 0:
+            save(model, model_ema, opt, scaler, epoch)
+        if epoch >= num_epochs:
             break
-    save(model, model_ema, opt, scaler, epoch)
     
     return
 

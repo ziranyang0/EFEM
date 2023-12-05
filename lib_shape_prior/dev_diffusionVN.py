@@ -252,7 +252,7 @@ def val(model_ema, autoencoder, val_dl, device, seed, epoch):
 def save(model, model_ema, opt, scaler, epoch):
     # if not os.path.exists('./ckpts'):
     #     os.mkdir('./ckpts')
-    filename = '/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/latent_diffusionVN_test.pth'
+    filename = '/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/latent_diffusionVN_long.pth'
     obj = {
         'model': model.state_dict(),
         'model_ema': model_ema.state_dict(),
@@ -316,15 +316,15 @@ def main():
 
     seed = 0
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
     torch.manual_seed(0)
 
     # 更新模型的潜在维度和隐藏层维度
     latent_dim = train_ds[0][0].shape[0]
     # hidden_dims = [2048,4096, 8192, 8192,4096, 2048]  # Example of hidden dimensions
-    hidden_dims = [4096, 8192, 8192,4096]  # Example of hidden dimensions
-    # hidden_dims = [2048,4096,4096,2048]  # Example of hidden dimensions
+    # hidden_dims = [4096, 8192, 8192,4096]  # Example of hidden dimensions
+    hidden_dims = [2048,4096,4096,2048]  # Example of hidden dimensions
     # hidden_dims = [1024,2048,2048,1024]  # Example of hidden dimensions
     # hidden_dims = [2048,2048]  # Example of hidden dimensions
     # hidden_dims = [4096,4096]  # Example of hidden dimensions
@@ -335,7 +335,7 @@ def main():
     model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
     model_ema = deepcopy(model)
     # wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_1024_2048_2048_1024")
-    wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_4096_8192_lr3e-4_decay0.9_VecLinear_repocodebook")
+    wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_2048_4096_lr3e-4_decay0.9_VecLinear_repocodebook_epo200k")
 
     print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
     wandb.log({"max_freq": max_freq, "num_bands": num_bands,
@@ -343,9 +343,11 @@ def main():
                "model_params": sum(p.numel() for p in model.parameters())})
     autoencoder = None
     
+    num_epochs = 200000
 
-    opt = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.8)
+    opt = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-5)
+    # scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.8)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=len(train_dl)*num_epochs, eta_min=1e-7)
     scaler = torch.cuda.amp.GradScaler()
     epoch = 0
 
@@ -376,7 +378,7 @@ def main():
         #     val(model_ema, autoencoder, val_dl, device, seed, epoch)
         #     demo(model_ema, autoencoder, val_dl, device, seed, epoch, steps, eta)
         #     save(model, model_ema, opt, scaler, epoch)
-        if epoch >= 60000:
+        if epoch >= num_epochs:
             break
     save(model, model_ema, opt, scaler, epoch)
     

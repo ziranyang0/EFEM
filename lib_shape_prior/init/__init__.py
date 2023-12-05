@@ -35,7 +35,7 @@ def dev_get_cfg():
     project_root = os.getcwd()
 
     # cmd = parse_cmd_params()
-    cmd = argparse.Namespace(config='./configs/mugs.yaml', f=True,
+    cmd = argparse.Namespace(config='/home/ziran/se3/EFEM/lib_shape_prior/configs/mugs.yaml', f=True,
                              gpu=None, batch_size=32, 
                              num_workers=-1, debug=False,
                              anomaly=False, debug_logging_flag=False,
@@ -43,8 +43,8 @@ def dev_get_cfg():
                              enable_anomaly=False,)
 
     
-    config_fn = os.path.join(project_root, "./configs/mugs.yaml")
-    cfg = load_config(config_fn, default_path=os.path.join(project_root, "init/default.yaml"))
+    config_fn = os.path.join(project_root, "/home/ziran/se3/EFEM/lib_shape_prior/configs/mugs.yaml")
+    cfg = load_config(config_fn, default_path=os.path.join(project_root, "/home/ziran/se3/EFEM/lib_shape_prior/init/default.yaml"))
 
     # merge cmd to cfg
     cfg = merge_cmd2cfg(cmd, cfg)

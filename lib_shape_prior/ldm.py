@@ -12,43 +12,102 @@ import wandb
 from torch.utils.data import Dataset, DataLoader
 
 class CustomDataset(Dataset):
-    def __init__(self, codebook):
-        # feat = torch.cat([codebook['z_so3'], #[B, 256, 3]
-        #           codebook['z_inv'].unsqueeze(2).repeat(1,1,3), # [B,256] -> [B, 256, 3]
-        #           codebook['scale'].unsqueeze(1).unsqueeze(1).repeat(1,1,3), # [B]-> [B,1,3]
-        #           codebook['center']], dim=1) # [B, 1, 3]
-        feat = torch.cat([codebook['z_so3'], #[B, 256, 3]
-                  codebook['z_inv'].unsqueeze(2).repeat(1,1,3)], dim=1) # [B,256] -> [B, 256, 3]
-                #   codebook['scale'].unsqueeze(1).unsqueeze(1).repeat(1,1,3), # [B]-> [B,1,3]
-                #   codebook['center'].transpose(1,2).repeat(1,1,3)], dim=1) # [B, 3, 3]
-                # [B, 1, 3] -> [x,y,z]
-        feat = feat*10
-        # invariance scalar
-        assert feat.shape[1:] == (512,3)
-        self.feat = [feat[i] for i in range(feat.shape[0])]
-        self.pcl = [codebook['pcl'][i] for i in range(codebook['pcl'].shape[0])]
+    def __init__(self, mode="concat", normalize_level=0, codebook=None):
+        assert mode in ["concat", "seperate"]
+        self.mode = mode
+        if codebook == None:
+            codebook_path = "/home/ziran/se3/EFEM/cache/mugs.npz"
+            with np.load(codebook_path) as data:
+                codebook = {key: data[key] for key in data}
+            del codebook['id']
+            for k, v in codebook.items():
+                if isinstance(v, np.ndarray):
+                    newv = torch.from_numpy(v)
+                    codebook[k] = newv
+                print(k, v.shape)
+
+        self.normalize_params = {
+            "normalize_level": 0,
+            'z_so3_mean': 0,
+            'z_so3_std': 1,
+            'z_inv_mean': 0,
+            'z_inv_std': 1,
+        }
+        if normalize_level == 1:
+            z_so3_mean = codebook['z_so3'].mean()
+            z_so3_std = codebook['z_so3'].std()
+            codebook['z_so3'] = (codebook['z_so3'] - z_so3_mean) / z_so3_std
+            z_inv_mean = codebook['z_inv'].mean()
+            z_inv_std = codebook['z_inv'].std()
+            codebook['z_inv'] = (codebook['z_inv'] - z_inv_mean) / z_inv_std
+            normalize_params = {
+                "normalize_level": normalize_level,
+                'z_so3_mean': z_so3_mean,
+                'z_so3_std': z_so3_std,
+                'z_inv_mean': z_inv_mean,
+                'z_inv_std': z_inv_std,
+            }
+            print("normalized!")
+            print(normalize_params)
+            self.normalize_params = normalize_params
+            
+        if mode == "concate":
+            # feat = torch.cat([codebook['z_so3'], #[B, 256, 3]
+            #           codebook['z_inv'].unsqueeze(2).repeat(1,1,3), # [B,256] -> [B, 256, 3]
+            #           codebook['scale'].unsqueeze(1).unsqueeze(1).repeat(1,1,3), # [B]-> [B,1,3]
+            #           codebook['center']], dim=1) # [B, 1, 3]
+            feat = torch.cat([codebook['z_so3'], #[B, 256, 3]
+                    codebook['z_inv'].unsqueeze(2).repeat(1,1,3)], dim=1) # [B,256] -> [B, 256, 3]
+                    #   codebook['scale'].unsqueeze(1).unsqueeze(1).repeat(1,1,3), # [B]-> [B,1,3]
+                    #   codebook['center'].transpose(1,2).repeat(1,1,3)], dim=1) # [B, 3, 3]
+                    # [B, 1, 3] -> [x,y,z]
+            # !!! 注意这里乘了10
+            feat = feat*10
+            assert feat.shape[1:] == (512,3)
+            self.feat = [feat[i] for i in range(feat.shape[0])]
+            self.pcl = [codebook['pcl'][i] for i in range(codebook['pcl'].shape[0])]
+            
+        elif mode == "seperate":
+            self.x = [codebook['z_so3'][i] for i in range(codebook['z_so3'].shape[0])]
+            self.s = [codebook['z_inv'][i] for i in range(codebook['z_inv'].shape[0])]
+            self.pcl = [codebook['pcl'][i] for i in range(codebook['pcl'].shape[0])]
+            
+            self.x = self.x + self.x
+            self.s = self.s + self.s
+            self.pcl = self.pcl + self.pcl
+
+        print("dataset loaded")
 
     def __len__(self):
-        return len(self.feat)
+        if self.mode == "concat":
+            return len(self.feat)
+        elif self.mode == "seperate":
+            return len(self.x)
 
     def __getitem__(self, idx):
-        feature = self.feat[idx]
-        pcl_item = self.pcl[idx]
-        return feature, pcl_item
+        if self.mode == "concat":
+            feature = self.feat[idx]
+            pcl_item = self.pcl[idx]
+            return feature, pcl_item
+        elif self.mode == "seperate":
+            x = self.x[idx]
+            s = self.s[idx]
+            pcl_item = self.pcl[idx]
+            return torch.concat([x,s.unsqueeze(1)], dim=1), pcl_item         
 
 @dataclass
 class TrainingConfig:
     image_size = 128  # the generated image resolution
     train_batch_size = 16
     eval_batch_size = 16  # how many images to sample during evaluation
-    num_epochs = 200000
+    num_epochs = 1500000
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
     lr_warmup_steps = 500
     save_image_epochs = 1000
-    save_model_epochs = 10000
+    save_model_epochs = 100000
     mixed_precision = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir = "ddpm-11-30-21"  # the model name locally and on the HF Hub
+    output_dir = "./dev_ckpt/12-2/"  # the model name locally and on the HF Hub
 
     push_to_hub = False  # whether to upload the saved model to the HF Hub
     hub_model_id = "<your-username>/<my-awesome-model>"  # the name of the repository to create on the HF Hub
@@ -64,11 +123,6 @@ from PIL import Image
 from diffusers import DDPMScheduler
 
 noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
-# noise = torch.randn(sample_image.shape)
-# timesteps = torch.LongTensor([50])
-# noisy_image = noise_scheduler.add_noise(sample_image, noise, timesteps)
-
-# Image.fromarray(((noisy_image.permute(0, 2, 3, 1) + 1.0) * 127.5).type(torch.uint8).numpy()[0])
 
 from accelerate import Accelerator
 from huggingface_hub import create_repo, upload_folder
@@ -76,12 +130,13 @@ from tqdm.auto import tqdm
 from pathlib import Path
 import os
 
-def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler):
+def train_loop(args, config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, train_ds):
     # Initialize accelerator and tensorboard logging
+    report_to = "wandb" if not args.debug else None
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        log_with="wandb",
+        log_with=report_to,
         project_dir=os.path.join(config.output_dir, "logs"),
     )
     if accelerator.is_main_process:
@@ -108,8 +163,10 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         # progress_bar.set_description(f"Epoch {epoch}")
 
         for step, batch in enumerate(train_dataloader):
-            features = batch[0] # [B, 512, 3]
-            clean_images = features # [B, 512, 3]
+            # features = batch[0] # [B, 512, 3]
+            features = batch[0] # [B, 256, 4]
+            # clean_images = features # [B, 512, 3]
+            clean_images = features # [B, 256, 3]
             # Sample noise to add to the images
             noise = torch.randn(clean_images.shape, device=clean_images.device)
             bs = clean_images.shape[0]
@@ -149,27 +206,18 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         # After each epoch you optionally sample some demo images with evaluate() and save the model
         if accelerator.is_main_process:
-            from diffusers import DDPMPipeline
-            pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
+            # from diffusers import DDPMPipeline
+            # pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
 
             # if (epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1:
             #     evaluate(config, epoch, pipeline)
 
             if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1:
-                save(model, log_loss, epoch, config.output_dir)
-                # if config.push_to_hub:
-                #     upload_folder(
-                #         repo_id=repo_id,
-                #         folder_path=config.output_dir,
-                #         commit_message=f"Epoch {epoch}",
-                #         ignore_patterns=["step_*", "epoch_*"],
-                #     )
-                # else:
-                    # pipeline.save_pretrained(config.output_dir)
+                save(model, log_loss, epoch, config.output_dir, train_ds)
 
 import argparse
 
-def save(model, loss, epoch, output_dir):
+def save(model, loss, epoch, output_dir, train_ds):
     # if not os.path.exists('./ckpts'):
     #     os.mkdir('./ckpts')
     filename = f'{output_dir}/model_{epoch}.pt'
@@ -177,6 +225,7 @@ def save(model, loss, epoch, output_dir):
         'model': model.state_dict(),
         'loss': loss,
         'epoch': epoch,
+        'normalize_params': train_ds.normalize_params,
     }
     torch.save(obj, filename)
 
@@ -216,12 +265,13 @@ class origin_LatentDiffusionModel(nn.Module):
                                      out_features=self.latent_dim))
         
 
-    def forward(self, z_so3, z_inv, t):
-        batch_size = z_so3.size(0)
+    def forward(self, z_so3_and_z_inv, t):
+        # z_so3_and_z_inv: [B, 256, 4]
+        batch_size = z_so3_and_z_inv.size(0)
         # Embed time
         t_emb = self.timestep_embed(t)
-        z_so3 = z_so3.reshape(batch_size, -1) # [b, 256, 3] -> [b, 768]
-        feat = torch.cat([z_so3, z_inv, t_emb], dim=1) # [b, 768+256+xxx]
+        z_so3_and_z_inv = z_so3_and_z_inv.reshape(batch_size, -1) # [b, 256, 4] -> [b, 1024]
+        feat = torch.cat([z_so3_and_z_inv, t_emb], dim=1) # [b, 1024+xxx]
 
         for i, layer in enumerate(self.layers):
             if i == len(self.layers)-1:
@@ -233,7 +283,7 @@ class origin_LatentDiffusionModel(nn.Module):
         # assert pred_z_so3.shape[1:] == (256, 3), pred_z_so3.shape
         # assert pred_z_inv.shape[1:] == (256,), pred_z_inv.shape
         
-        return pred_z_so3, pred_z_inv
+        return torch.concat([pred_z_so3, pred_z_inv.unsqueeze(2)], dim=2)
 
 from vec_layers_out import VecLinearNormalizeActivate as VecLNA
 from vec_layers_out import VecLinear
@@ -282,59 +332,53 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()
-
     if args.debug:
         print("Debug mode is enabled")
     
-    config = TrainingConfig()
-
-    codebook_path = "/home/ziran/se3/EFEM/cache/mugs.npz"
-    with np.load(codebook_path) as data:
-        # 将 npz 文件内容转换为字典
-        codebook = {key: data[key] for key in data}
-
-    del codebook['id']
-    for k, v in codebook.items():
-        if isinstance(v, np.ndarray):
-            newv = torch.from_numpy(v)
-            codebook[k] = newv
-        print(k, v.shape)
-    # 创建 Dataset
-    train_ds = CustomDataset(codebook)
-
-    # 创建 DataLoader
-    train_dl = DataLoader(train_ds, batch_size=149, shuffle=True)
-
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('Using device:', device)
+    config = TrainingConfig()
+    seed = 0
+    torch.manual_seed(seed)
 
 
-
+    train_ds = CustomDataset(mode="seperate", normalize_level=1)
+    train_dl = DataLoader(train_ds, batch_size=149*2, shuffle=True)
+    
     # Create the model and optimizer
     latent_dim = 256
-    # hidden_dims = [2048,4096, 8192, 8192,4096, 2048]  # Example of hidden dimensions
-    # hidden_dims = [4096, 8192, 8192,4096]  # Example of hidden dimensions
-    # hidden_dims = [1024,1024,1024,1024,1024,1024]  # Example of hidden dimensions
-    # hidden_dims = [256,256,256]  # Example of hidden dimensions
-    hidden_dims = [2048, 4096, 4096, 2048]
+    # hidden_dims = [2048,4096, 8192, 8192,4096, 2048]
+    # hidden_dims = [1024,1024,1024,1024,1024,1024]
+    # hidden_dims = [256,256,256]
+    # hidden_dims = [2048, 4096, 4096, 2048]
+    # hidden_dims = [4096, 8192, 8192,4096]
+    hidden_dims = [8192,8192*2,8192*2,8192]
     max_freq = 4  # Example max frequency for Fourier features
     num_bands = 4  # Number of frequency bands
 
     # 初始化模型
-    # model = origin_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
-    # if not args.debug:
-    #     wandb.init(project="vnDiffusion", entity="_zrrr", name="origin_x10_2048_4096_weighted1/4_lrup_leakyrelu")
-
-    
-    model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
-    # wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_1024_2048_2048_1024")
+    model = origin_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
+    args.run_name = "origin_x10_8192_8192*2_normal1_1500k_bs2"
+    config.output_dir += args.run_name
     if not args.debug:
-        wandb.init(project="vnDiffusion", entity="_zrrr", name="ldm_vnVanilla_2048_4096")
+        wandb.init(project="vnDiffusion", entity="_zrrr", name=args.run_name)
 
         print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
         wandb.log({"max_freq": max_freq, "num_bands": num_bands,
                 #    "device": device,
                 "model_params": sum(p.numel() for p in model.parameters())})
+    
+    
+    # model = LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
+    # # wandb.init(project="vnDiffusion", entity="_zrrr", name="run_vnVanilla_1024_2048_2048_1024")
+    # if not args.debug:
+    #     wandb.init(project="vnDiffusion", entity="_zrrr", name="cluster_ldm_vnVanilla_4096_8192_600k")
+    #     # wandb.init(project="vnDiffusion", entity="_zrrr", name="cluster_ldm_vnVanilla_2048_4096_200k")
+
+    #     print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
+    #     wandb.log({"max_freq": max_freq, "num_bands": num_bands,
+    #             #    "device": device,
+    #             "model_params": sum(p.numel() for p in model.parameters())})
     
 
 
@@ -348,13 +392,8 @@ def main():
         num_training_steps=(len(train_dl) * config.num_epochs),
     )
 
-    seed = 0
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print('Using device:', device)
-    torch.manual_seed(0)
-
-    train_loop(config, model, noise_scheduler, optimizer, train_dl, lr_scheduler)
+    train_loop(args, config, model, noise_scheduler, optimizer, train_dl, lr_scheduler, train_ds)
 
 
 
