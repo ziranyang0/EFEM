@@ -149,49 +149,59 @@ class LatentDiffusionModel(nn.Module):
         leak_neg_slope=0.2
         act_func = nn.LeakyReLU(negative_slope=leak_neg_slope, inplace=False)
         self.layers = nn.ModuleList()
+        self.skip_connections = []
         for i, hidden_dim in enumerate(hidden_dims):
             if i == 0:
-                self.layers.append(VecLNA(in_features=self.latent_dim,
+                self.layers.append(VecLNA(in_features=self.latent_dim+self.t_emb_dim,
                                           out_features=hidden_dims[0],
                                           s_in_features=self.latent_dim+self.t_emb_dim,
                                           s_out_features=scalar_hidden_dims[0],
-                                          mode="so3", act_func=act_func))
+                                          mode="so3", 
+                                        #   s_normalization=torch.nn.BatchNorm1d(scalar_hidden_dims[0]),
+                                          act_func=act_func))
+                if self.latent_dim + self.t_emb_dim == hidden_dims[0] and self.latent_dim + self.t_emb_dim == scalar_hidden_dims[0]:
+                    self.skip_connections.append(True)
+                else:
+                    self.skip_connections.append(False)
             else:
                 self.layers.append(VecLNA(in_features=hidden_dims[i-1],
                                           out_features=hidden_dims[i],
                                           s_in_features=scalar_hidden_dims[i-1],
                                           s_out_features=scalar_hidden_dims[i],
+                                        #   s_normalization=torch.nn.BatchNorm1d(scalar_hidden_dims[i]),
                                           mode="so3", act_func=act_func))
-
-        # 最后一层输出与原始维度相同
-        # self.layers.append(VecLNA(in_features=hidden_dims[-1],
-        #                         out_features=self.latent_dim,
-        #                         s_in_features=hidden_dims[-1],
-        #                         s_out_features=self.latent_dim,
-        #                         mode="so3", act_func=act_func))
+                if hidden_dims[i-1] == hidden_dims[i] and scalar_hidden_dims[i-1] == scalar_hidden_dims[i]:
+                    self.skip_connections.append(True)
+                else:
+                    self.skip_connections.append(False)
         
         self.vn_head = VecLinear(v_in=hidden_dims[-1],
                                  v_out=self.latent_dim,
+                                 s_in=scalar_hidden_dims[-1],
+                                 s_out=self.latent_dim,
                                  mode="so3",)
-        self.scalar_head = nn.Linear(scalar_hidden_dims[-1], self.latent_dim)
-
-        # VecLinear()
-        # nn.Linear()
-
+        # self.scalar_head = nn.Linear(scalar_hidden_dims[-1], self.latent_dim)
+    
     def forward(self, z_so3, z_inv, t):
         batch_size = z_so3.size(0)
         # Embed time
-        t_emb = self.timestep_embed(t)
-        z_inv = torch.cat([z_inv, t_emb], dim=1)
-        # t_emb = self.timestep_embed(t).unsqueeze(2).repeat(1, 1, 3)
-        # z_so3 = torch.cat((z_so3, t_emb), dim=1)
+        t_emb_s = self.timestep_embed(t)
+        t_emb_x = self.timestep_embed(t).unsqueeze(2).repeat(1, 1, 3)
+        z_inv = torch.cat([z_inv, t_emb_s], dim=1)
+        z_so3 = torch.cat([z_so3, t_emb_x], dim=1)
 
         for i, layer in enumerate(self.layers):
-            z_so3, z_inv = layer(z_so3, z_inv)
+            z_so3_new, z_inv_new = layer(z_so3, z_inv)
+            if self.skip_connections[i]:
+                z_so3 = z_so3_new + z_so3
+                z_inv = z_inv_new + z_inv
+            else:
+                z_so3 = z_so3_new
+                z_inv = z_inv_new
         
-        pred_z_so3 = self.vn_head(z_so3)
-        pred_z_inv = self.scalar_head(z_inv)
-        # pred_z_so3, pred_z_inv = z_so3, z_inv
+        # pred_z_so3 = self.vn_head(z_so3)
+        # pred_z_inv = self.scalar_head(z_inv)
+        pred_z_so3, pred_z_inv = self.vn_head(z_so3, z_inv)
         
         return pred_z_so3, pred_z_inv
 
@@ -237,6 +247,51 @@ class origin_LatentDiffusionModel(nn.Module):
         
         return pred_z_so3, pred_z_inv
 
+class Residual_LatentDiffusionModel(nn.Module):
+    def __init__(self, latent_dim: int, hidden_dims, max_freq, num_bands, std=0.2):
+        super(Residual_LatentDiffusionModel, self).__init__()
+        self.latent_dim = latent_dim * 4
+        self.timestep_embed = FourierFeatures(max_freq, num_bands, std=std)
+        self.t_emb_dim = 2 * num_bands
+
+        self.layers = nn.ModuleList()
+        leak_neg_slope = 0.2
+        self.act_func = nn.LeakyReLU(negative_slope=leak_neg_slope, inplace=False)
+        self.skip_connections = []
+
+        for i, hidden_dim in enumerate(hidden_dims):
+            in_dim = self.latent_dim + self.t_emb_dim if i == 0 else hidden_dims[i-1]
+            out_dim = hidden_dims[i]
+            self.layers.append(nn.Linear(in_features=in_dim, out_features=out_dim))
+
+            # Check if dimensions match for a skip-connection
+            if in_dim == out_dim:
+                self.skip_connections.append(True)
+            else:
+                self.skip_connections.append(False)
+
+        # 最后一层输出与原始维度相同
+        self.layers.append(nn.Linear(in_features=hidden_dims[-1], out_features=self.latent_dim))
+        self.skip_connections.append(False)
+
+    def forward(self, z_so3, z_inv, t):
+        batch_size = z_so3.size(0)
+        # Embed time
+        t_emb = self.timestep_embed(t)
+        z_so3 = z_so3.reshape(batch_size, -1)  # [b, 256, 3] -> [b, 768]
+        feat = torch.cat([z_so3, z_inv, t_emb], dim=1)  # [b, 768+256+xxx]
+
+        for i, layer in enumerate(self.layers):
+            if self.skip_connections[i]:
+                feat = self.act_func(layer(feat)) + feat  # Residual connection
+            else:
+                feat = self.act_func(layer(feat))
+
+        pred_z_so3 = feat[:, :3*256].reshape(batch_size, -1, 3)
+        pred_z_inv = feat[:, 3*256:]
+        
+        return pred_z_so3, pred_z_inv
+
 
 def eval_loss(model, autoencoder, rng, x, s, device):
 
@@ -266,8 +321,8 @@ def eval_loss(model, autoencoder, rng, x, s, device):
         pred_x, pred_s= model(noised_x, noised_s, log_snrs)
         # (pred_x - target_x).pow(2).shape: [149, 256, 3]
         # (pred_s - target_s).pow(2).shape: [149, 256]
-        return ((pred_x - target_x).pow(2).mean([1, 2]).mul(weights).mean() * 3/4 + \
-                (pred_s - target_s).pow(2).mean(1).mul(weights).mean()) * 1/4
+        return ((pred_x - target_x).pow(2).mean([1, 2]).mul(weights).mean()*1/2 + \
+                (pred_s - target_s).pow(2).mean(1).mul(weights).mean()*1/2) 
 
 
 def train(model, model_ema, autoencoder, opt, scheduler, rng, train_dl,scaler, epoch, ema_decay, device, args):
@@ -318,11 +373,11 @@ def val(model_ema, autoencoder, val_dl, device, seed, epoch):
         count += len(reals)
     loss = total_loss / count
     tqdm.write(f'Validation: Epoch: {epoch}, loss: {loss:g}')
-
+EXP_NAME = ""
 def save(model, model_ema, opt, scaler, epoch):
     # if not os.path.exists('./ckpts'):
     #     os.mkdir('./ckpts')
-    filename = '/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/latent_diffusionVN_xs_vnhead_200k.pth'
+    filename = f'/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/{EXP_NAME}/model.pth'
     obj = {
         'model': model.state_dict(),
         'model_ema': model_ema.state_dict(),
@@ -364,6 +419,7 @@ class CustomDataset(Dataset):
         return (x, s), pcl_item
 
 import argparse
+import os
 
 # N []
 def main():
@@ -405,23 +461,36 @@ def main():
     # 更新模型的潜在维度和隐藏层维度
     latent_dim = 256
     # hidden_dims = [2048,4096, 8192, 8192,4096, 2048]  # Example of hidden dimensions
-    # hidden_dims = [4096, 8192, 8192,4096]  # Example of hidden dimensions
     # hidden_dims = [1024,1024,1024,1024,1024,1024]  # Example of hidden dimensions
     # hidden_dims = [256,256,256]  # Example of hidden dimensions
-    hidden_dims = [2048, 4096, 4096, 2048]
-    # hidden_dims = [4096, 8192, 8192,4096]  # Example of hidden dimensions
+    # hidden_dims = [2048, 4096, 4096, 2048]
+    # hidden_dims = [2048, 2048, 2048, 2048]
+    # hidden_dims = [4096, 8192, 8192, 4096]  # Example of hidden dimensions
+    hidden_dims = [4096, 4096, 4096, 4096]  # Example of hidden dimensions
     max_freq = 4  # Example max frequency for Fourier features
     num_bands = 4  # Number of frequency bands
 
+    # hidden_dims = [256 * 16, 4096, 4096, 2048]
+    # model = CNN_MLP_diffusion(latent_dim, hidden_dims, max_freq, num_bands).to(device)
+        # wandb.init(project="vnDiffusion", entity="_zrrr", name="test_CNNMLP")
+
     # 初始化模型
     # model = origin_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
+    # model = Residual_LatentDiffusionModel(latent_dim, hidden_dims, max_freq, num_bands).to(device)
     # if not args.debug:
-    #     wandb.init(project="vnDiffusion", entity="_zrrr", name="origin_2048_4096_weighted1/4_lrup_leakyrelu_cos_200k")
+    #     wandb.init(project="vnDiffusion", entity="_zrrr", name="test_residualMLP_4096*4")
+    #     # wandb.init(project="vnDiffusion", entity="_zrrr", name="origin_4096_8192*2_weighted1/2_leakyrelu_cos_200k")
 
     scalar_hidden_dims = [256,256,256,256]
     model = LatentDiffusionModel(latent_dim, hidden_dims, scalar_hidden_dims, max_freq, num_bands).to(device)
     if not args.debug:
-        wandb.init(project="vnDiffusion", entity="_zrrr", name="vnhead_2048_4096_weighted1/4_lr5e-4_cos_200k_scalarhiddendims")
+        global EXP_NAME
+        # EXP_NAME = "vnhead_rightweighted_2048_4096_lr5e-4_cos_400k_scalarhiddendims_tembedx_nnNorm"
+        EXP_NAME = "vnhead_testresidual_4096*4_cos_200k"
+        output_path = f"/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt/{EXP_NAME}/"
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+        wandb.init(project="vnDiffusion", entity="_zrrr", name=EXP_NAME)
     
     print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
     if not args.debug:

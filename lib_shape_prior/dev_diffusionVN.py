@@ -275,10 +275,8 @@ class CustomDataset(Dataset):
         #           codebook['center']], dim=1) # [B, 1, 3]
         feat = torch.cat([codebook['z_so3'], #[B, 256, 3]
                   codebook['z_inv'].unsqueeze(2).repeat(1,1,3)], dim=1) # [B,256] -> [B, 256, 3]
-                #   codebook['scale'].unsqueeze(1).unsqueeze(1).repeat(1,1,3), # [B]-> [B,1,3]
-                #   codebook['center'].transpose(1,2).repeat(1,1,3)], dim=1) # [B, 3, 3]
-                # [B, 1, 3] -> [x,y,z]
-        # invariance scalar
+        
+        
         assert feat.shape[1:] == (512,3)
         self.feat = [feat[i] for i in range(feat.shape[0])]
         self.pcl = [codebook['pcl'][i] for i in range(codebook['pcl'].shape[0])]

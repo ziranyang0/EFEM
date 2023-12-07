@@ -526,6 +526,7 @@ class VecLinearNormalizeActivate(nn.Module):
             v_act = self.act(v_out)
             if self.s_normalization is not None:
                 s_out = self.s_normalization(s_out)
+            # s_out = F.normalize(s_out, dim=1)
             s_act = self.act_func(s_out)
             return v_act, s_act
         else:
