@@ -133,7 +133,7 @@ dmypy.json
 ####
 
 ./weigths/
-# cache/
+cache/
 data/
 log/
 !demo/data
@@ -150,3 +150,4 @@ lib_shape_prior/dev_ckpt/*
 !lib_shape_prior/dev_ckpt/selected.pt
 # lib_shape_prior/dev_ckpt/
 lib_shape_prior/wandb/
+
