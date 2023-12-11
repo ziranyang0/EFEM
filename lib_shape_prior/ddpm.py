@@ -1,45 +1,19 @@
-# %%
+
 import numpy as np
 import wandb
-
-import math
 from inspect import isfunction
 from functools import partial
 
-import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from einops import rearrange
 
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 
-# %%
-def exists(x):
-    return x is not None
-
-def default(val, d):
-    if exists(val):
-        return val
-    return d() if isfunction(d) else d
-
-class Residual(nn.Module):
-    def __init__(self, fn):
-        super().__init__()
-        self.fn = fn
-
-    def forward(self, x, *args, **kwargs):
-        return self.fn(x, *args, **kwargs) + x
-
-def Upsample(dim):
-    return nn.ConvTranspose2d(dim, dim, 4, 2, 1)
-
-def Downsample(dim):
-    return nn.Conv2d(dim, dim, 4, 2, 1)
 
 
 
-# %%
+
 def cosine_beta_schedule(timesteps, s=0.008):
     """
     cosine schedule as proposed in https://arxiv.org/abs/2102.09672
@@ -67,7 +41,6 @@ def sigmoid_beta_schedule(timesteps):
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
-# %%
 timesteps = 1000
 
 # define beta schedule
@@ -91,7 +64,7 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t.cpu())
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
-# %%
+
 # forward diffusion
 def q_sample(x_start, t, noise=None):
     if noise is None:
@@ -104,10 +77,8 @@ def q_sample(x_start, t, noise=None):
 
     return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-# %% [markdown]
-# Let's test it on a particular time step:
 
-# %%
+# reverse diffusion loss
 def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
     if noise is None:
         noise = torch.randn_like(x_start)
@@ -127,15 +98,14 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
     return loss
 
 
-# %%
 @torch.no_grad()
-def p_sample(model, x, t, t_index):
+def uncond_p_sample(model, x, t, t_index):
     betas_t = extract(betas, t, x.shape)
     sqrt_one_minus_alphas_cumprod_t = extract(
         sqrt_one_minus_alphas_cumprod, t, x.shape
     )
     sqrt_recip_alphas_t = extract(sqrt_recip_alphas, t, x.shape)
-
+    
     # Equation 11 in the paper
     # Use our model (noise predictor) to predict the mean
     model_mean = sqrt_recip_alphas_t * (
@@ -148,25 +118,27 @@ def p_sample(model, x, t, t_index):
         posterior_variance_t = extract(posterior_variance, t, x.shape)
         noise = torch.randn_like(x)
         # Algorithm 2 line 4:
-        return model_mean + torch.sqrt(posterior_variance_t) * noise
+        return model_mean + torch.sqrt(posterior_variance_t) * noise 
 
-# Algorithm 2 but save all images:
+# Algorithm 2:
 @torch.no_grad()
-def p_sample_loop(model, shape):
+def uncond_p_sample_loop(model, shape, return_traj = False):
     device = next(model.parameters()).device
 
     b = shape[0]
     # start from pure noise (for each example in the batch)
-    img = torch.randn(shape, device=device)
-    imgs = []
+    x_t = torch.randn(shape, device=device)
+    traj = []
 
     for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
-        img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
-        imgs.append(img.cpu().numpy())
-    return imgs
+        x_t_minus1 = uncond_p_sample(model, x_t, torch.full((b,), i, device=device, dtype=torch.long), i)
+        x_t = x_t_minus1
+        traj.append(x_t.cpu().numpy())
+    if return_traj:
+        return traj
+    else:    
+        return x_t
 
-# %% [markdown]
-# ## Train the model
 
 
 class FourierFeatures(nn.Module):
@@ -277,56 +249,6 @@ class CustomDataset(Dataset):
         pcl_item = self.pcl[idx]
         return torch.concat([x, s.unsqueeze(-1)], dim=-1), pcl_item
 
-
-# %%
-
-device = torch.device('cuda:6' if torch.cuda.is_available() else 'cpu')
-print('Using device:', device)
-torch.manual_seed(1984)
-
-
-import argparse
-args = argparse.Namespace()
-args.category = "mugs"
-args.bs = 149
-args.exp_name = "mugs_ddpm_cos_5k_l2loss"
-args.save_interval = 10000
-args.debug = False
-args.log_interval = 1
-args.num_epochs = 50000
-
-
-
-codebook_path = f"/home/ziran/se3/EFEM/cache/{args.category}.npz"
-train_ds = CustomDataset(codebook_path)
-
-# 创建 DataLoader
-train_dl = DataLoader(train_ds, batch_size=args.bs, shuffle=True)
-
-# 初始化模型
-latent_dim = 256
-hidden_dims = [2048, 2048, 2048, 2048] 
-max_freq = 4  # Example max frequency for Fourier features
-num_bands = 4  # Number of frequency bands
-scalar_hidden_dims = [256,256,256,256]
-model = LatentDiffusionModel(latent_dim, hidden_dims, scalar_hidden_dims, max_freq, num_bands).to(device)
-
-from torch.optim import Adam
-optimizer = Adam(model.parameters(), lr=1e-3)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dl)*args.num_epochs, eta_min=1e-7)
-if not args.debug:
-    wandb.init(project="vnDiffusion", entity="_zrrr", name=args.exp_name)
-
-print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
-if not args.debug:
-    wandb.log({"max_freq": max_freq, "num_bands": num_bands,
-            #    "device": device,
-            "model_params": sum(p.numel() for p in model.parameters())})
-# %% [markdown]
-# Let's start training!
-
-# %%
-from torchvision.utils import save_image
 import os
 def save_model(model, epoch,
          args, exp_path = "/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt"):
@@ -339,32 +261,80 @@ def save_model(model, epoch,
         "category": args.category
     }
     torch.save(obj, filename)
-# epochs = 5
 
-for epoch in range(args.num_epochs):
-    for step, batch in enumerate(train_dl):
-        optimizer.zero_grad()
+def main():
+    device = torch.device('cuda:7' if torch.cuda.is_available() else 'cpu')
+    print('Using device:', device)
+    torch.manual_seed(1984)
 
-        batch_size = batch[0].shape[0]
-        batch = batch[0].to(device)
 
-        # Algorithm 1 line 3: sample t uniformally for every example in the batch
-        t = torch.randint(0, timesteps, (batch_size,), device=device).long()
+    import argparse
+    args = argparse.Namespace()
+    args.category = "mugs"
+    args.bs = 149
+    args.exp_name = "NEWmugs_ddpm_cos_10k_l1huber"
+    args.save_interval = 10000
+    args.debug = False
+    args.log_interval = 1
+    args.num_epochs = 100000
 
-        loss = p_losses(model, batch, t, loss_type="l2")
 
-        # if step % 100 == 0:
-        #     print("Loss:", loss.item())
 
-        loss.backward()
-        optimizer.step()
-        if step % args.log_interval == 0 and epoch % 1 == 0:
-            log_msg = {"epoch": epoch, "iteration": step,
-                    "loss": loss.item(),
-                    "lr": scheduler.get_last_lr()[0],}
-            wandb.log(log_msg)
-            print(log_msg)
+    # codebook_path = f"/home/ziran/se3/EFEM/cache/{args.category}.npz"
+    codebook_path = f"/home/ziran/se3/EFEM/lib_shape_prior/log/12_10_shape_prior_mugs_old/12_10_shape_prior_mugs_FOR_hopefullybetterAE/codebook.npz"
+    train_ds = CustomDataset(codebook_path)
 
-    if (epoch + 1) % args.save_interval == 0:
-        save_model(model, epoch, args)
-    scheduler.step()
+    # 创建 DataLoader
+    train_dl = DataLoader(train_ds, batch_size=args.bs, shuffle=True)
+
+    # 初始化模型
+    latent_dim = 256
+    hidden_dims = [2048, 2048, 2048, 2048] 
+    max_freq = 4  # Example max frequency for Fourier features
+    num_bands = 4  # Number of frequency bands
+    scalar_hidden_dims = [256,256,256,256]
+    model = LatentDiffusionModel(latent_dim, hidden_dims, scalar_hidden_dims, max_freq, num_bands).to(device)
+
+    from torch.optim import Adam
+    optimizer = Adam(model.parameters(), lr=1e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dl)*args.num_epochs, eta_min=1e-7)
+    if not args.debug:
+        wandb.init(project="vnDiffusion", entity="_zrrr", name=args.exp_name)
+
+    print('Diffusion Model parameters:', sum(p.numel() for p in model.parameters()))
+    if not args.debug:
+        wandb.log({"max_freq": max_freq, "num_bands": num_bands,
+                #    "device": device,
+                "model_params": sum(p.numel() for p in model.parameters())})
+
+
+    for epoch in range(args.num_epochs):
+        for step, batch in enumerate(train_dl):
+            optimizer.zero_grad()
+
+            batch_size = batch[0].shape[0]
+            batch = batch[0].to(device)
+
+            # Algorithm 1 line 3: sample t uniformally for every example in the batch
+            t = torch.randint(0, timesteps, (batch_size,), device=device).long()
+
+            loss = p_losses(model, batch, t, loss_type="huber")
+
+            # if step % 100 == 0:
+            #     print("Loss:", loss.item())
+
+            loss.backward()
+            optimizer.step()
+            if step % args.log_interval == 0 and epoch % 1 == 0:
+                log_msg = {"epoch": epoch, "iteration": step,
+                        "loss": loss.item(),
+                        "lr": scheduler.get_last_lr()[0],}
+                wandb.log(log_msg)
+                print(log_msg)
+
+        if (epoch + 1) % args.save_interval == 0:
+            save_model(model, epoch, args)
+        scheduler.step()
+
+if __name__ == "__main__":
+    main()
