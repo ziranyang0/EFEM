@@ -108,10 +108,11 @@ def uncond_p_sample(model, x, t, t_index):
     
     # Equation 11 in the paper
     # Use our model (noise predictor) to predict the mean
+    # Note: \grad_{x_t} \log p(x_t|x_0) = - (\epsilon) / (\sqrt{1 - \alpha^{hat}_t})
+    #                                   = - model(x, t) / sqrt_one_minus_alphas_cumprod_t
     model_mean = sqrt_recip_alphas_t * (
         x - betas_t * model(x, t) / sqrt_one_minus_alphas_cumprod_t
     )
-
     if t_index == 0:
         return model_mean
     else:
@@ -200,6 +201,7 @@ class LatentDiffusionModel(nn.Module):
         # self.scalar_head = nn.Linear(scalar_hidden_dims[-1], self.latent_dim)
     
     def forward(self, z, t):
+        t=t/1000
         z_so3, z_inv = z[:,:,:3], z[:,:,3]
         batch_size = z_so3.size(0)
         # Embed time
@@ -263,7 +265,7 @@ def save_model(model, epoch,
     torch.save(obj, filename)
 
 def main():
-    device = torch.device('cuda:7' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:4' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
     torch.manual_seed(1984)
 
@@ -272,16 +274,16 @@ def main():
     args = argparse.Namespace()
     args.category = "mugs"
     args.bs = 149
-    args.exp_name = "NEWmugs_ddpm_cos_10k_l1huber"
+    args.exp_name = "mugs_ddpm_cos_30k_l1huber_normT_1024"
     args.save_interval = 10000
     args.debug = False
     args.log_interval = 1
-    args.num_epochs = 100000
+    args.num_epochs = 300000
 
 
 
-    # codebook_path = f"/home/ziran/se3/EFEM/cache/{args.category}.npz"
-    codebook_path = f"/home/ziran/se3/EFEM/lib_shape_prior/log/12_10_shape_prior_mugs_old/12_10_shape_prior_mugs_FOR_hopefullybetterAE/codebook.npz"
+    codebook_path = f"/home/ziran/se3/EFEM/cache/{args.category}.npz"
+    # codebook_path = f"/home/ziran/se3/EFEM/lib_shape_prior/log/12_10_shape_prior_mugs_old/12_10_shape_prior_mugs_FOR_hopefullybetterAE/codebook.npz"
     train_ds = CustomDataset(codebook_path)
 
     # 创建 DataLoader
@@ -289,14 +291,15 @@ def main():
 
     # 初始化模型
     latent_dim = 256
-    hidden_dims = [2048, 2048, 2048, 2048] 
+    # hidden_dims = [2048, 2048, 2048, 2048] 
+    hidden_dims = [1024, 1024, 1024, 1024] 
     max_freq = 4  # Example max frequency for Fourier features
     num_bands = 4  # Number of frequency bands
     scalar_hidden_dims = [256,256,256,256]
     model = LatentDiffusionModel(latent_dim, hidden_dims, scalar_hidden_dims, max_freq, num_bands).to(device)
 
     from torch.optim import Adam
-    optimizer = Adam(model.parameters(), lr=1e-3)
+    optimizer = Adam(model.parameters(), lr=5e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dl)*args.num_epochs, eta_min=1e-7)
     if not args.debug:
         wandb.init(project="vnDiffusion", entity="_zrrr", name=args.exp_name)
