@@ -83,7 +83,7 @@ def get_ddpm_scheduler_variables(timesteps):
 
 #     return timesteps, betas, alphas, alphas_cumprod, alphas_cumprod_prev, sqrt_recip_alphas, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, posterior_variance
 
-timesteps = 10000
+timesteps = 1000
 timesteps, betas, alphas, alphas_cumprod, alphas_cumprod_prev, sqrt_recip_alphas, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, posterior_variance = get_ddpm_scheduler_variables(timesteps=timesteps)
 
 def extract(a, t, x_shape):
@@ -211,7 +211,7 @@ class LatentDiffusionModel(nn.Module):
 from torch.utils.data import Dataset, DataLoader
 
 class CustomDataset(Dataset):
-    def __init__(self, codebook_path):
+    def __init__(self, codebook_path, normalization = False):
         with np.load(codebook_path) as data:
             # 将 npz 文件内容转换为字典
             codebook = {key: data[key] for key in data}
@@ -222,6 +222,30 @@ class CustomDataset(Dataset):
                 codebook[k] = newv
             print(k, v.shape)
         
+        self.normalization = normalization
+        if normalization:
+            z_so3_mean = codebook['z_so3'].mean()
+            z_so3_std = codebook['z_so3'].std()
+            z_so3_normalize = (codebook['z_so3']-z_so3_mean)/z_so3_std
+            z_inv_mean = codebook['z_inv'].mean()
+            z_inv_std = codebook['z_inv'].std()
+            z_inv_normalize = (codebook['z_inv']-z_inv_mean)/z_inv_std
+            codebook['z_so3'] = z_so3_normalize
+            codebook['z_inv'] = z_inv_normalize
+            print("========== Data Normalization BEGIN ==========")
+            print("z_so3_mean", z_so3_mean)
+            print("z_so3_std", z_so3_std)
+            print("z_inv_mean", z_inv_mean)
+            print("z_inv_std", z_inv_std)
+            self.normal_params = {
+                "z_so3_mean": z_so3_mean,
+                "z_so3_std": z_so3_std,
+                "z_inv_mean": z_inv_mean,
+                "z_inv_std": z_inv_std,
+            }
+            print("========== Data Normalization FINISHED ==========")
+            
+
         self.x = [codebook['z_so3'][i] for i in range(codebook['z_so3'].shape[0])] # [256, 3]
         self.s = [codebook['z_inv'][i] for i in range(codebook['z_inv'].shape[0])] # [256]
         self.pcl = [codebook['pcl'][i] for i in range(codebook['pcl'].shape[0])]
@@ -258,17 +282,17 @@ def main():
     args = argparse.Namespace()
     args.category = "mugs"
     args.bs = 149
-    args.exp_name = "mugs_ddpm_cos_200k_l1huber_normT_2048_steps10k"
+    args.exp_name = "mugs_ddpm_cos_400k_l1huber_normT_2048_dataNorm"
     args.save_interval = 100000
     args.debug = False
     args.log_interval = 1
-    args.num_epochs = 2000000
+    args.num_epochs = 400000
 
 
 
     codebook_path = f"/home/ziran/se3/EFEM/cache/{args.category}.npz"
     # codebook_path = f"/home/ziran/se3/EFEM/lib_shape_prior/log/12_10_shape_prior_mugs_old/12_10_shape_prior_mugs_FOR_hopefullybetterAE/codebook.npz"
-    train_ds = CustomDataset(codebook_path)
+    train_ds = CustomDataset(codebook_path, normalization = True)
 
     # 创建 DataLoader
     train_dl = DataLoader(train_ds, batch_size=args.bs, shuffle=True)
