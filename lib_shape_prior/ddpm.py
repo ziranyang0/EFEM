@@ -41,23 +41,50 @@ def sigmoid_beta_schedule(timesteps):
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
-timesteps = 1000
+def get_ddpm_scheduler_variables(timesteps):
+    # define beta schedule
+    betas = linear_beta_schedule(timesteps=timesteps)
+    # betas = cosine_beta_schedule(timesteps=timesteps)
+    # betas = quadratic_beta_schedule(timesteps=timesteps)
 
-# define beta schedule
-betas = linear_beta_schedule(timesteps=timesteps)
+    # define alphas
+    alphas = 1. - betas
+    alphas_cumprod = torch.cumprod(alphas, axis=0)
+    alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
+    sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
 
-# define alphas
-alphas = 1. - betas
-alphas_cumprod = torch.cumprod(alphas, axis=0)
-alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
-sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+    # calculations for diffusion q(x_t | x_{t-1}) and others
+    sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+    sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
 
-# calculations for diffusion q(x_t | x_{t-1}) and others
-sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
-sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+    # calculations for posterior q(x_{t-1} | x_t, x_0)
+    posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
-# calculations for posterior q(x_{t-1} | x_t, x_0)
-posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
+    return timesteps, betas, alphas, alphas_cumprod, alphas_cumprod_prev, sqrt_recip_alphas, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, posterior_variance
+
+# def get_ddim_scheduler_variables(timesteps):
+#     # define beta schedule
+#     betas = linear_beta_schedule(timesteps=timesteps)
+#     # betas = cosine_beta_schedule(timesteps=timesteps)
+#     # betas = quadratic_beta_schedule(timesteps=timesteps)
+
+#     # define alphas
+#     alphas = 1. - betas
+#     alphas_cumprod = torch.cumprod(alphas, axis=0)
+#     alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
+#     sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+
+#     # calculations for diffusion q(x_t | x_{t-1}) and others
+#     sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+#     sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+
+#     # calculations for posterior q(x_{t-1} | x_t, x_0)
+#     posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
+
+#     return timesteps, betas, alphas, alphas_cumprod, alphas_cumprod_prev, sqrt_recip_alphas, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, posterior_variance
+
+timesteps = 10000
+timesteps, betas, alphas, alphas_cumprod, alphas_cumprod_prev, sqrt_recip_alphas, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, posterior_variance = get_ddpm_scheduler_variables(timesteps=timesteps)
 
 def extract(a, t, x_shape):
     batch_size = t.shape[0]
@@ -84,7 +111,7 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
         noise = torch.randn_like(x_start)
 
     x_noisy = q_sample(x_start=x_start, t=t, noise=noise)
-    predicted_noise = denoise_model(x_noisy, t)
+    predicted_noise = denoise_model(x_noisy, t, timesteps)
 
     if loss_type == 'l1':
         loss = F.l1_loss(noise, predicted_noise)
@@ -96,49 +123,6 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
         raise NotImplementedError()
 
     return loss
-
-
-@torch.no_grad()
-def uncond_p_sample(model, x, t, t_index):
-    betas_t = extract(betas, t, x.shape)
-    sqrt_one_minus_alphas_cumprod_t = extract(
-        sqrt_one_minus_alphas_cumprod, t, x.shape
-    )
-    sqrt_recip_alphas_t = extract(sqrt_recip_alphas, t, x.shape)
-    
-    # Equation 11 in the paper
-    # Use our model (noise predictor) to predict the mean
-    # Note: \grad_{x_t} \log p(x_t|x_0) = - (\epsilon) / (\sqrt{1 - \alpha^{hat}_t})
-    #                                   = - model(x, t) / sqrt_one_minus_alphas_cumprod_t
-    model_mean = sqrt_recip_alphas_t * (
-        x - betas_t * model(x, t) / sqrt_one_minus_alphas_cumprod_t
-    )
-    if t_index == 0:
-        return model_mean
-    else:
-        posterior_variance_t = extract(posterior_variance, t, x.shape)
-        noise = torch.randn_like(x)
-        # Algorithm 2 line 4:
-        return model_mean + torch.sqrt(posterior_variance_t) * noise 
-
-# Algorithm 2:
-@torch.no_grad()
-def uncond_p_sample_loop(model, shape, return_traj = False):
-    device = next(model.parameters()).device
-
-    b = shape[0]
-    # start from pure noise (for each example in the batch)
-    x_t = torch.randn(shape, device=device)
-    traj = []
-
-    for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
-        x_t_minus1 = uncond_p_sample(model, x_t, torch.full((b,), i, device=device, dtype=torch.long), i)
-        x_t = x_t_minus1
-        traj.append(x_t.cpu().numpy())
-    if return_traj:
-        return traj
-    else:    
-        return x_t
 
 
 
@@ -200,8 +184,8 @@ class LatentDiffusionModel(nn.Module):
                                  mode="so3",)
         # self.scalar_head = nn.Linear(scalar_hidden_dims[-1], self.latent_dim)
     
-    def forward(self, z, t):
-        t=t/1000
+    def forward(self, z, t, timesteps):
+        t=t/timesteps
         z_so3, z_inv = z[:,:,:3], z[:,:,3]
         batch_size = z_so3.size(0)
         # Embed time
@@ -256,7 +240,7 @@ def save_model(model, epoch,
          args, exp_path = "/home/ziran/se3/EFEM/lib_shape_prior/dev_ckpt"):
     if not os.path.exists(f"{exp_path}/{args.exp_name}"):
         os.makedirs(f"{exp_path}/{args.exp_name}")
-    filename = f'{exp_path}/{args.exp_name}/model.pth'
+    filename = f'{exp_path}/{args.exp_name}/model_epo{epoch}.pth'
     obj = {
         'model': model.state_dict(),
         'epoch': epoch,
@@ -265,7 +249,7 @@ def save_model(model, epoch,
     torch.save(obj, filename)
 
 def main():
-    device = torch.device('cuda:4' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:5' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
     torch.manual_seed(1984)
 
@@ -274,11 +258,11 @@ def main():
     args = argparse.Namespace()
     args.category = "mugs"
     args.bs = 149
-    args.exp_name = "mugs_ddpm_cos_30k_l1huber_normT_1024"
-    args.save_interval = 10000
+    args.exp_name = "mugs_ddpm_cos_200k_l1huber_normT_2048_steps10k"
+    args.save_interval = 100000
     args.debug = False
     args.log_interval = 1
-    args.num_epochs = 300000
+    args.num_epochs = 2000000
 
 
 
@@ -291,8 +275,8 @@ def main():
 
     # 初始化模型
     latent_dim = 256
-    # hidden_dims = [2048, 2048, 2048, 2048] 
-    hidden_dims = [1024, 1024, 1024, 1024] 
+    hidden_dims = [2048, 2048, 2048, 2048] 
+    # hidden_dims = [1024, 1024, 1024, 1024] 
     max_freq = 4  # Example max frequency for Fourier features
     num_bands = 4  # Number of frequency bands
     scalar_hidden_dims = [256,256,256,256]
