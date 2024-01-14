@@ -13,8 +13,11 @@ from mpl_toolkits.mplot3d import Axes3D
 from PIL import Image
 import io
 
-def viz_pc(tensor):
-    x, y, z = tensor[:, 0].cpu(), tensor[:, 1].cpu(), tensor[:, 2].cpu()
+def viz_pc(input_array):
+    if isinstance(input_array, torch.Tensor):
+        x, y, z = input_array[:, 0].cpu(), input_array[:, 1].cpu(), input_array[:, 2].cpu()
+    elif isinstance(input_array, np.ndarray):
+        x, y, z = input_array[:, 0], input_array[:, 1], input_array[:, 2]
     # 创建散点图对象
     trace = go.Scatter3d(
         x=x,
@@ -43,7 +46,7 @@ def viz_pc(tensor):
     py.iplot(fig)
 
 
-def viz_x(latent_x, AEmodel, device, normal_params=None):
+def viz_x(latent_x, AEmodel, device, normal_params=None, gt_pc=None):
     pred_so3_feat = latent_x[:,:,:3].to(device)
     pred_inv_feat = latent_x[:,:,3].to(device)
     if normal_params is not None:
@@ -90,6 +93,9 @@ def viz_x(latent_x, AEmodel, device, normal_params=None):
         )
         sdf_grid = sdf_hat.reshape(-1, space_dim[0], space_dim[1], space_dim[2]).to("cpu").detach().numpy()
 
+    if gt_pc is not None:
+        if isinstance(gt_pc, torch.Tensor):
+            gt_pc = gt_pc.cpu().detach().numpy()
     for data in sdf_grid:
         plotly.offline.init_notebook_mode()
 
@@ -104,6 +110,9 @@ def viz_x(latent_x, AEmodel, device, normal_params=None):
             surface_threshold = anchor_surface_threshold
         verts, faces, normals, values = measure.marching_cubes(data, level=surface_threshold)
         verts = (verts / (N - 1)) * (2*di) - di
+        print("x max:", verts[:,0].max(), "x min:", verts[:,0].min())
+        print("y max:", verts[:,1].max(), "y min:", verts[:,1].min())
+        print("z max:", verts[:,2].max(), "z min:", verts[:,2].min())
 
         x, y, z = zip(*verts)
         i, j, k = zip(*faces)
@@ -125,9 +134,24 @@ def viz_x(latent_x, AEmodel, device, normal_params=None):
             )
         )
 
+        if gt_pc is not None:
+            # 创建点云图表
+            point_cloud = go.Scatter3d(
+                x=gt_pc[:, 0], y=gt_pc[:, 1], z=gt_pc[:, 2],
+                mode='markers',
+                marker=dict(
+                    size=2,  # 点的大小
+                    color='red',  # 点的颜色
+                    opacity=0.8
+                ),
+                name='Point Cloud'
+            )
+        
         # 合并图表并显示
-        # fig = go.Figure(data=[mesh, pointcloud_plot], layout=layout)
-        fig = go.Figure(data=[mesh], layout=layout)
+        if gt_pc is not None:
+            fig = go.Figure(data=[mesh, point_cloud], layout=layout)
+        else:
+            fig = go.Figure(data=[mesh], layout=layout)
         plotly.offline.iplot(fig)
 
 
@@ -147,7 +171,9 @@ def viz_sdf(sdf, N=50, di = 0.5):
             surface_threshold = anchor_surface_threshold
         verts, faces, normals, values = measure.marching_cubes(data, level=surface_threshold)
         verts = (verts / (N - 1)) * (2*di) - di
-
+        print("x max:", verts[:,0].max(), "x min:", verts[:,0].min())
+        print("y max:", verts[:,1].max(), "y min:", verts[:,1].min())
+        print("z max:", verts[:,2].max(), "z min:", verts[:,2].min())
         x, y, z = zip(*verts)
         i, j, k = zip(*faces)
 
@@ -256,8 +282,8 @@ def viz_x_img(latent_x, AEmodel, device, normal_params=None):
     import math
 
     def calculate_rows_cols(num_images):
-        cols = int(math.sqrt(num_images))
-        rows = num_images // cols
+        rows = int(math.sqrt(num_images))
+        cols = num_images // rows
         # 如果乘积小于总数，则增加一行
         if rows * cols < num_images:
             rows += 1
@@ -266,6 +292,7 @@ def viz_x_img(latent_x, AEmodel, device, normal_params=None):
     # 示例：假设有10个图像
     num_images = len(single_images)
     rows, cols = calculate_rows_cols(num_images)
+    print("rows:", rows, "cols:", cols)
 
     # 计算每行的宽度和总体高度
     row_width = sum(im.size[0] for im in single_images[:cols])

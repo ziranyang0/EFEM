@@ -1,0 +1,9 @@
+<robot name="mesh_robot">
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <mesh filename="output_mesh.obj"/>
+      </geometry>
+    </visual>
+  </link>
+</robot>
